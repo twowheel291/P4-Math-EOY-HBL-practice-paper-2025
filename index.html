@@ -48,7 +48,7 @@
 <body>
 
 <h1>MCQ + Fill-in (GitHub Pages • One-at-a-time)</h1>
-<div id="status" class="status">This page auto-loads <code>mcq.txt</code> (same folder). Put images beside this HTML or use relative URLs in mcq.txt.</div>
+<div id="status" class="status">Auto-loading <code>mcq.txt</code> from the same folder…</div>
 
 <div class="loader">
   <strong>1) Source for mcq.txt</strong>
@@ -461,8 +461,8 @@ async function loadMCQFrom(url){
     }
     initState(items.length);
     $("quizArea").classList.remove("hidden");
-    $("status").textContent = `Loaded ${items.length} questions from ${url}`;
-    document.querySelector(".loader").style.display = "none"; // hide loader after success
+    $("status").textContent = "";                               // hide status line
+    document.querySelector(".loader").style.display = "none";    // hide loader
     buildJump();
     renderCurrent();
   }catch(e){
@@ -528,8 +528,8 @@ $("btnReload").addEventListener("click", ()=>{
       return;
     }
     $("quizArea").classList.remove("hidden");
-    $("status").textContent = `Loaded ${items.length} questions from ${url}`;
-    document.querySelector(".loader").style.display = "none"; // hide on success
+    $("status").textContent = "";                               // hide status line
+    document.querySelector(".loader").style.display = "none";    // hide loader
     initState(items.length);
     buildJump(); renderCurrent();
   }).catch(err=>{
