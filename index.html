@@ -1,0 +1,507 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>MCQ + Fill-in (GitHub Pages • One-at-a-time, Bright Colors)</title>
+<style>
+  body { font-family: Arial, sans-serif; font-size:16px; line-height:1.4; margin:0; padding:16px; }
+  h1 { font-size:20px; margin:0 0 10px; }
+  .status { font-size:14px; color:#555; margin-bottom:10px; }
+
+  .loader { border:1px dashed #bbb; border-radius:8px; padding:12px; margin:12px 0; }
+  .loader strong { display:block; margin-bottom:8px; }
+  .loader .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .loader input[type="text"] { flex:1 1 320px; font-size:16px; padding:8px 10px; }
+  .loader button { font-size:16px; padding:8px 12px; }
+
+  .hud { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:12px 0; }
+  .hud .pill { background:#f5f5f5; border:1px solid #ddd; border-radius:999px; padding:6px 10px; }
+  .spacer { flex:1 1 auto; }
+
+  .stage { border:1px solid #ddd; border-radius:8px; padding:12px; margin:12px 0; min-height:160px; transition: background-color 0.3s; }
+  .q-title { font-weight:bold; margin-bottom:8px; }
+  .q-img { display:block; max-width:100%; height:auto; margin:6px 0 10px; }
+  .options label { margin-right:12px; display:inline-block; padding:4px 0; cursor:pointer; }
+
+  .fitb-wrap { margin-top:8px; }
+  .fitb-input { width:100%; max-width:360px; font-size:18px; padding:10px 12px; border:2px solid #888; border-radius:6px; }
+  .fitb-input:focus { outline:none; border-color:#555; }
+  .fitb-hint { font-size:13px; color:#666; margin-top:6px; }
+
+  .answer-key { font-size:14px; color:#333; margin-top:10px; display:inline-block; }
+  .hidden { display:none; }
+
+  /* Bright, high-contrast feedback */
+  .correct { background:#00c851; color:white; border-color:#009c3a; }
+  .wrong   { background:#ff4444; color:white; border-color:#cc0000; }
+  .correct-choice { font-weight:bold; text-decoration: underline; }
+
+  .nav { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 0; }
+  .nav button, .nav select { font-size:16px; padding:8px 12px; }
+  .controls { display:flex; gap:10px; flex-wrap:wrap; margin:14px 0; }
+  .result { margin-top:8px; font-weight:bold; }
+
+  .muted { color:#777; font-size:13px; }
+</style>
+</head>
+<body>
+
+<h1>MCQ + Fill-in (GitHub Pages • One-at-a-time)</h1>
+<div id="status" class="status">This page will fetch <code>MCQ.txt</code> from the same folder. Put images beside this HTML (or use relative URLs in MCQ.txt).</div>
+
+<div class="loader">
+  <strong>1) Source for MCQ.txt</strong>
+  <div class="row">
+    <input id="mcqUrl" type="text" placeholder="MCQ.txt URL or relative path" value="MCQ.txt">
+    <button id="btnLoad" type="button">Load</button>
+    <button id="btnReload" type="button" title="Re-fetch the current URL">Reload</button>
+  </div>
+  <div class="muted">Tip: You can also set <code>?file=path/MCQ.txt</code> in the URL.</div>
+</div>
+
+<div id="quizArea" class="hidden">
+  <div class="hud">
+    <span id="progress" class="pill">Q 0 / 0</span>
+    <span id="liveScore" class="pill">Score so far: 0 / 0</span>
+    <span class="spacer"></span>
+    <label class="pill">Jump:
+      <select id="jumpSelect"></select>
+    </label>
+    <button id="btnFirstUnanswered" class="pill" type="button">First Unanswered</button>
+  </div>
+
+  <div id="stage" class="stage"></div>
+
+  <div class="nav">
+    <button id="btnPrev"  type="button">◀ Prev</button>
+    <button id="btnNext"  type="button">Next ▶</button>
+  </div>
+
+  <div class="controls">
+    <button id="btnSubmit" type="button">Submit</button>
+    <button id="btnReset"  type="button">Reset</button>
+  </div>
+  <div id="score" class="result"></div>
+</div>
+
+<script>
+/* -------- GitHub Pages version (fetch-based) with FITB (single-line, multi-answers) --------
+   - Auto fetches MCQ.txt from same folder (or ?file=...).
+   - MCQ when answer is 1..4
+   - FITB when answer contains one or more /alt/ segments: e.g. /72/72cm/72 cm/
+     (unlimited; matching ignores case & spaces)
+   - FITB uses a single-line <input type="text" maxlength="10">; Enter checks.
+   - No auto-advance; user navigates with Prev/Next/Jump.
+*/
+
+let items = []; // [{type:'mcq'|'fitb', question, answer (num|null), answersText (string[]|null)}]
+let userAnswers = []; // for mcq: number; for fitb: string; null if unanswered
+let revealed = [];    // [bool]
+let current = 0;
+let currentMCQUrl = "MCQ.txt";
+
+function $(id){ return document.getElementById(id); }
+function normalizeLineEndings(s){return s.replace(/\r\n/g,"\n").replace(/\r/g,"\n");}
+
+function splitRow(line){
+  if(line.indexOf("\t")!==-1){var p=line.split("\t");return [p[0],p[1]];}
+  const p2=line.trim().split(/\s{2,}/); if(p2.length>=2) return [p2[0],p2[1]];
+  const t=line.trim().split(/\s+/); if(t.length>=2){const ans=t.pop(); return [t.join(" "), ans];}
+  return [line.trim(),""];
+}
+
+function isHttpUrl(s){ return /^https?:\/\//i.test(s); }
+function looksLikeImage(s){ return /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(s) || isHttpUrl(s); }
+function getImgSrc(q){ return q; } // filenames resolve relative to this HTML on GitHub Pages
+
+function parseMCQ(text){
+  const out=[], lines=normalizeLineEndings(text).split("\n");
+  for(let raw of lines){
+    if(!raw) continue;
+    const line = raw.trim(); if(!line) continue;
+    const parts = splitRow(line);
+    const q = (parts[0]||"").trim();
+    const aRaw = (parts[1]||"").trim();
+    if(!q) continue;
+
+    // Gather ALL /alt/ segments: unlimited
+    const alts = [];
+    const re = /\/([^\/]*)\//g;
+    let m;
+    while((m = re.exec(aRaw)) !== null){
+      const s = (m[1]||"").trim();
+      if(s) alts.push(s);
+    }
+    if(alts.length){
+      out.push({ type:'fitb', question:q, answer:null, answersText: alts });
+      continue;
+    }
+
+    // MCQ numeric 1..4
+    const ans = parseInt(aRaw,10);
+    if(!isNaN(ans) && ans>=1 && ans<=4){
+      out.push({ type:'mcq', question:q, answer:ans, answersText:null });
+    }else{
+      out.push({ type:'mcq', question:q, answer:null, answersText:null }); // unscorable / missing key
+    }
+  }
+  return out;
+}
+
+function initState(n){
+  userAnswers = new Array(n).fill(null);
+  revealed    = new Array(n).fill(false);
+  current     = 0;
+}
+
+function norm(s){ return String(s).trim().replace(/\s+/g,' ').toLowerCase(); }
+
+// Accept if normalized strings match OR if both match when all spaces are removed.
+// This makes "72cm" match "72 cm" etc.
+function isFitbCorrect(user, answers){
+  if (typeof user !== 'string' || !answers || !answers.length) return false;
+  const u1 = norm(user);
+  const u2 = u1.replace(/\s+/g, '');
+  for (const a of answers){
+    const a1 = norm(a);
+    const a2 = a1.replace(/\s+/g, '');
+    if (u1 === a1 || u2 === a2) return true;
+  }
+  return false;
+}
+
+function tallyScore(){
+  let correct=0, total=0;
+  for(let i=0;i<items.length;i++){
+    const it = items[i];
+    if(it.type==='mcq' && it.answer!=null){
+      total++;
+      if(userAnswers[i]===it.answer) correct++;
+    }else if(it.type==='fitb' && it.answersText && it.answersText.length){
+      total++;
+      if(isFitbCorrect(userAnswers[i], it.answersText)) correct++;
+    }
+  }
+  return {correct,total};
+}
+
+function previewStem(q){
+  if(looksLikeImage(q)) return "[image]";
+  const s = q.trim();
+  return s.length>24 ? s.slice(0,24)+"…" : s || "(blank)";
+}
+
+function updateHUD(){
+  $("progress").textContent = `Q ${items.length? current+1:0} / ${items.length}`;
+  const tally = tallyScore();
+  $("liveScore").textContent = `Score so far: ${tally.correct} / ${tally.total}`;
+
+  const sel = $("jumpSelect");
+  sel.innerHTML = "";
+  for(let i=0;i<items.length;i++){
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    const ua = userAnswers[i];
+    let mark = " ";
+    if(ua!=null){
+      const it = items[i];
+      const ok = (it.type==='mcq' && it.answer!=null && ua===it.answer) ||
+                 (it.type==='fitb' && isFitbCorrect(ua, it.answersText||[]));
+      mark = ok ? "✓ " : "✗ ";
+    }
+    opt.textContent = `${i+1}. ${mark}${previewStem(items[i].question)}`;
+    sel.appendChild(opt);
+  }
+  sel.value = String(current);
+
+  $("btnPrev").disabled = (current<=0);
+  $("btnNext").disabled = (current>=items.length-1);
+}
+
+function renderCurrent(){
+  const stage = $("stage");
+  stage.className = "stage";
+  stage.innerHTML = "";
+
+  if(!items.length){ stage.textContent = "No questions loaded."; return; }
+
+  const it = items[current];
+
+  // Stem
+  if(looksLikeImage(it.question)){
+    const img = document.createElement("img");
+    img.className = "q-img";
+    img.alt = `Question ${current+1}`;
+    img.src = getImgSrc(it.question);
+    stage.appendChild(img);
+  }else{
+    const p = document.createElement("div");
+    p.className = "q-title";
+    p.textContent = it.question || `(Question ${current+1})`;
+    stage.appendChild(p);
+  }
+
+  if(it.type === 'mcq'){
+    // Options 1..4
+    const opts=document.createElement("div");
+    opts.className="options";
+    for(let v=1; v<=4; v++){
+      const id=`q${current}_${v}`;
+      const label=document.createElement("label");
+      label.setAttribute("data-val", String(v));
+      const rb=document.createElement("input");
+      rb.type="radio"; rb.name=`q${current}`; rb.id=id; rb.value=String(v);
+      if(userAnswers[current]===v) rb.checked=true;
+      label.htmlFor=id;
+      label.appendChild(rb);
+      label.appendChild(document.createTextNode(" "+v));
+      opts.appendChild(label);
+    }
+    stage.appendChild(opts);
+
+    // Key
+    const key=document.createElement("span");
+    key.id="key_current";
+    key.className="answer-key"+(revealed[current]?"":" hidden");
+    key.textContent = it.answer==null ? " (Answer: ?)" : ` (Answer: ${it.answer})`;
+    stage.appendChild(key);
+
+    // Decorate if already answered
+    if(userAnswers[current]!=null && it.answer!=null){
+      const chosen=userAnswers[current];
+      if(chosen===it.answer){ stage.classList.add("correct"); }
+      else{
+        stage.classList.add("wrong");
+        const cl=stage.querySelector(`.options label[data-val="${it.answer}"]`);
+        if(cl) cl.classList.add("correct-choice");
+      }
+    }
+
+    // Instant-check handler
+    opts.addEventListener("change", function(ev){
+      if(ev.target && ev.target.matches('input[type="radio"]')){
+        onAnswerMCQ(parseInt(ev.target.value,10));
+      }
+    });
+
+  }else{
+    // FITB input (single line)
+    const wrap = document.createElement("div");
+    wrap.className = "fitb-wrap";
+    const inp = document.createElement("input");
+    inp.id = "fitb_current";
+    inp.className = "fitb-input";
+    inp.type = "text";
+    inp.setAttribute("maxlength","10");
+    inp.placeholder = "Type your answer… (max 10 chars)";
+    if(typeof userAnswers[current]==='string') inp.value = userAnswers[current];
+    wrap.appendChild(inp);
+
+    const hint = document.createElement("div");
+    hint.className = "fitb-hint";
+    hint.textContent = "Press Enter or click outside to check.";
+    wrap.appendChild(hint);
+
+    stage.appendChild(wrap);
+
+    // Key (show only the first acceptable variant)
+    const key=document.createElement("span");
+    key.id="key_current";
+    key.className="answer-key"+(revealed[current]?"":" hidden");
+    const firstAns = (it.answersText && it.answersText.length) ? it.answersText[0] : null;
+    key.textContent = firstAns ? ` (Answer: ${firstAns})` : " (Answer: ?)";
+    stage.appendChild(key);
+
+    // Decorate if already answered
+    if(typeof userAnswers[current]==='string' && it.answersText && it.answersText.length){
+      if(isFitbCorrect(userAnswers[current], it.answersText)){
+        stage.classList.add("correct");
+      }else{
+        stage.classList.add("wrong");
+      }
+    }
+
+    // Enter checks; also check on blur
+    inp.addEventListener("keydown", (e)=>{
+      if(e.key === "Enter"){
+        e.preventDefault(); // stay single-line; do not submit form
+        onAnswerFITB(inp.value);
+      }
+    });
+    inp.addEventListener("blur", ()=> onAnswerFITB(inp.value));
+  }
+
+  // Update HUD & focus
+  updateHUD();
+  if(it.type==='mcq'){
+    const first = stage.querySelector('input[type="radio"]');
+    if(first && userAnswers[current]==null) first.focus();
+  }else{
+    const input = $("fitb_current");
+    if(input && userAnswers[current]==null) input.focus();
+  }
+}
+
+function onAnswerMCQ(chosen){
+  const stage = $("stage");
+  const key   = $("key_current");
+  const it    = items[current];
+
+  // reset visuals
+  stage.classList.remove("correct","wrong");
+  const prevHL = stage.querySelector(".correct-choice");
+  if(prevHL) prevHL.classList.remove("correct-choice");
+
+  userAnswers[current] = chosen;
+
+  if(it.answer==null){
+    if(key) key.classList.remove("hidden");
+    revealed[current] = true;
+    updateHUD();
+    return;
+  }
+
+  if(chosen === it.answer){
+    stage.classList.add("correct");
+    if(key) key.classList.remove("hidden");
+  }else{
+    stage.classList.add("wrong");
+    const cl=stage.querySelector(`.options label[data-val="${it.answer}"]`);
+    if(cl) cl.classList.add("correct-choice");
+    if(key) key.classList.remove("hidden");
+  }
+  revealed[current] = true;
+  updateHUD();
+}
+
+function onAnswerFITB(text){
+  const stage = $("stage");
+  const key   = $("key_current");
+  const it    = items[current];
+
+  // reset visuals
+  stage.classList.remove("correct","wrong");
+
+  userAnswers[current] = text;
+
+  const ok = isFitbCorrect(text, it.answersText||[]);
+  if(ok) stage.classList.add("correct");
+  else   stage.classList.add("wrong");
+
+  if(key) key.classList.remove("hidden");
+  revealed[current] = true;
+  updateHUD();
+}
+
+function goPrev(){ if(current>0){ current--; renderCurrent(); } }
+function goNext(){ if(current<items.length-1){ current++; renderCurrent(); } }
+
+function finalizeScore(){
+  const t = tallyScore();
+  if(t.total>0) $("score").textContent = `Final score: ${t.correct} / ${t.total}`;
+  else $("score").textContent = "No scorable questions (answers missing).";
+  $("liveScore").textContent = `Score so far: ${t.correct} / ${t.total}`;
+}
+
+function submitQuiz(){
+  revealed = revealed.map(()=>true);
+  $("score").textContent = "";
+  finalizeScore();
+  renderCurrent();
+}
+
+function resetQuiz(){
+  initState(items.length);
+  $("score").textContent = "";
+  current = 0;
+  renderCurrent();
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+function buildJump(){
+  const sel = $("jumpSelect");
+  sel.innerHTML = "";
+  for(let i=0;i<items.length;i++){
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = `${i+1}. ${previewStem(items[i].question)}`;
+    sel.appendChild(opt);
+  }
+  sel.value = "0";
+}
+
+/* ---------- Fetch MCQ.txt (GitHub Pages) ---------- */
+async function fetchText(url){
+  const res = await fetch(url, { cache: "no-store" });
+  if(!res.ok) throw new Error(`HTTP ${res.status} (${res.statusText})`);
+  return await res.text();
+}
+
+async function loadMCQFrom(url){
+  $("status").textContent = `Fetching ${url} ...`;
+  try{
+    const txt = await fetchText(url);
+    items = parseMCQ(txt);
+    if(!items.length){
+      $("status").textContent = `Loaded ${url}, but no valid lines were found.`;
+      $("quizArea").classList.add("hidden");
+      return;
+    }
+    initState(items.length);
+    $("quizArea").classList.remove("hidden");
+    $("status").textContent = `Loaded ${items.length} questions from ${url}`;
+    buildJump();
+    renderCurrent();
+  }catch(e){
+    $("quizArea").classList.add("hidden");
+    $("status").textContent = `Failed to fetch/parse ${url}: ` + (e && e.message ? e.message : e);
+  }
+}
+
+/* ---------- Wire up UI ---------- */
+$("btnPrev").addEventListener("click", goPrev);
+$("btnNext").addEventListener("click", goNext);
+$("jumpSelect").addEventListener("change", e=>{
+  const idx = parseInt(e.target.value,10);
+  if(!isNaN(idx) && idx>=0 && idx<items.length){
+    current = idx;
+    renderCurrent();
+  }
+});
+$("btnFirstUnanswered").addEventListener("click", ()=>{
+  let idx = userAnswers.findIndex(v=>v==null);
+  if(idx===-1) idx = 0;
+  current = idx;
+  renderCurrent();
+});
+
+$("btnSubmit").addEventListener("click", submitQuiz);
+$("btnReset").addEventListener("click", resetQuiz);
+
+$("btnLoad").addEventListener("click", ()=>{
+  const url = $("mcqUrl").value.trim() || "MCQ.txt";
+  currentMCQUrl = url;
+  loadMCQFrom(url);
+});
+$("btnReload").addEventListener("click", ()=>{
+  loadMCQFrom(currentMCQUrl);
+});
+
+/* ---------- Auto-init from ?file= ---------- */
+(function initFromQuery(){
+  const params = new URLSearchParams(location.search);
+  const f = (params.get("file") || "").trim();
+  if(f){
+    $("mcqUrl").value = f;
+    currentMCQUrl = f;
+  }else{
+    $("mcqUrl").value = "MCQ.txt";
+    currentMCQUrl = "MCQ.txt";
+  }
+  loadMCQFrom(currentMCQUrl);
+})();
+</script>
+
+</body>
+</html>
