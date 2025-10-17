@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>MCQ + Fill-in (GitHub Pages • One-at-a-time, Bright Colors)</title>
+<title>MCQ + Fill-in (GitHub Pages • Multi-part, Superscripts)</title>
 <style>
   body { font-family: Arial, sans-serif; font-size:16px; line-height:1.4; margin:0; padding:16px; }
   h1 { font-size:20px; margin:0 0 10px; }
@@ -32,10 +32,19 @@
   .answer-key { font-size:14px; color:#333; margin-top:10px; display:inline-block; }
   .hidden { display:none; }
 
-  /* Bright, high-contrast feedback */
+  /* Bright, high-contrast feedback for whole-card */
   .correct { background:#00c851; color:white; border-color:#009c3a; }
   .wrong   { background:#ff4444; color:white; border-color:#cc0000; }
   .correct-choice { font-weight:bold; text-decoration: underline; }
+
+  /* Per-part feedback */
+  .parts { margin-top:8px; display:flex; flex-direction:column; gap:10px; }
+  .part-row { display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap; }
+  .part-label { min-width:34px; font-weight:bold; }
+  .part-input { width:100%; max-width:360px; font-size:18px; padding:10px 12px; border:2px solid #888; border-radius:6px; }
+  .part-input.correct { border-color:#0a0; background:#eaffea; }
+  .part-input.wrong   { border-color:#c00; background:#ffeaea; }
+  .part-key { font-size:13px; color:#444; margin-left:4px; }
 
   .nav { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 0; }
   .nav button, .nav select { font-size:16px; padding:8px 12px; }
@@ -86,18 +95,18 @@
 </div>
 
 <script>
-/* -------- GitHub Pages version (fetch-based) with FITB (single-line, multi-answers) --------
+/* -------- GitHub Pages version (fetch-based) with FITB (single + multi-part) --------
    - Auto fetches mcq.txt from same folder (or ?file=...).
    - MCQ when answer is 1..4
-   - FITB when answer contains one or more /alt/ segments: e.g. /72/72cm/72 cm/
-     (unlimited; matching ignores case & spaces)
-   - FITB uses a single-line <input type="text" maxlength="10">; Enter checks.
-   - No auto-advance; user navigates with Prev/Next/Jump.
+   - Single FITB: acceptable variants inside \...\ or /.../
+   - Multi-part FITB: separate parts by "|" and optional labels like a:\...\ b:\...\
+   - Strict display format: prefix a variant with "=" (e.g., \=1.6\) to require exact text.
+   - Superscript UX: users can type "cm2" or "cm^2" and see "cm²"; grading treats them the same.
 */
 
-let items = []; // [{type:'mcq'|'fitb', question, answer (num|null), answersText (string[]|null)}]
-let userAnswers = []; // for mcq: number; for fitb: string; null if unanswered
-let revealed = [];    // [bool]
+let items = []; // See parseMCQ for shape per type
+let userAnswers = []; // mcq:number|null; fitb:string|null; fitb-multi:string[] (per part) or nulls
+let revealed = [];    // mcq:boolean; fitb:boolean; fitb-multi:boolean[] (per part)
 let current = 0;
 let currentMCQUrl = "mcq.txt"; // default
 
@@ -115,24 +124,78 @@ function isHttpUrl(s){ return /^https?:\/\//i.test(s); }
 function looksLikeImage(s){ return /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(s) || isHttpUrl(s); }
 function getImgSrc(q){ return q; } // filenames resolve relative to this HTML on GitHub Pages
 
+/* ---------------- Variant extraction: supports \...\ (preferred) and /.../ (legacy) --------------- */
+function parseAlts(aRaw){
+  const out = [];
+  if (!aRaw) return out;
+
+  // Backslash blocks: \ ... \
+  let m;
+  const reBack = /\\([^\\]*)\\/g;
+  while ((m = reBack.exec(aRaw)) !== null) {
+    const s = (m[1] || "").trim();
+    if (s) out.push(s);
+  }
+
+  // Forward-slash blocks: / ... /
+  const reFwd = /\/([^\/]*)\//g;
+  while ((m = reFwd.exec(aRaw)) !== null) {
+    const s = (m[1] || "").trim();
+    if (s) out.push(s);
+  }
+
+  return out;
+}
+
+/* ---------------- Multi-part field parser (a:\...\ | b:\...\) ---------------- */
+function parsePartsField(field){
+  const rawParts = field.split(/\s*\|\s*/).filter(Boolean);
+  if(!rawParts.length) return null;
+  const parts = [];
+  let nextAuto = 0;
+  const alpha = "abcdefghijklmnopqrstuvwxyz";
+
+  for(let seg of rawParts){
+    let label = null;
+    let body = seg.trim();
+
+    const m = body.match(/^\s*([A-Za-z]+)\s*:\s*(.*)$/);
+    if(m){
+      label = m[1].toLowerCase();
+      body  = m[2];
+    }else{
+      label = alpha[nextAuto] || String(nextAuto+1);
+      nextAuto++;
+    }
+
+    const alts = parseAlts(body);
+    parts.push({ label, answersText: alts });
+  }
+  return parts;
+}
+
+/* ---------------- Parse whole mcq.txt ---------------- */
 function parseMCQ(text){
   const out=[], lines=normalizeLineEndings(text).split("\n");
   for(let raw of lines){
     if(!raw) continue;
-    const line = raw.trim(); if(!line) continue;
+    const line = raw.trim(); if(!line || line.startsWith("#")) continue; // allow comments
     const parts = splitRow(line);
     const q = (parts[0]||"").trim();
     const aRaw = (parts[1]||"").trim();
     if(!q) continue;
 
-    // Gather ALL /alt/ segments: unlimited
-    const alts = [];
-    const re = /\/([^\/]*)\//g;
-    let m;
-    while((m = re.exec(aRaw)) !== null){
-      const s = (m[1]||"").trim();
-      if(s) alts.push(s);
+    // Multi-part FITB: detect "|" in the answer field
+    if(aRaw.includes("|")){
+      const mp = parsePartsField(aRaw);
+      if(mp && mp.length){
+        out.push({ type:'fitb-multi', question:q, parts: mp });
+        continue;
+      }
     }
+
+    // Single FITB: any alt segments
+    const alts = parseAlts(aRaw);
     if(alts.length){
       out.push({ type:'fitb', question:q, answer:null, answersText: alts });
       continue;
@@ -149,28 +212,171 @@ function parseMCQ(text){
   return out;
 }
 
+/* ---------------- State ---------------- */
 function initState(n){
-  userAnswers = new Array(n).fill(null);
-  revealed    = new Array(n).fill(false);
-  current     = 0;
+  userAnswers = new Array(n);
+  revealed    = new Array(n);
+  for(let i=0;i<n;i++){
+    const it = items[i];
+    if(it.type==='mcq'){ userAnswers[i]=null; revealed[i]=false; }
+    else if(it.type==='fitb'){ userAnswers[i]=null; revealed[i]=false; }
+    else if(it.type==='fitb-multi'){
+      userAnswers[i] = it.parts.map(()=>null);
+      revealed[i]    = it.parts.map(()=>false);
+    }
+  }
+  current = 0;
 }
 
-function norm(s){ return String(s).trim().replace(/\s+/g,' ').toLowerCase(); }
+/* ---------------- Superscript helpers (for UX + grading) ---------------- */
+const SUP_DIGITS = { "0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹" };
+const DESUP = { "⁰":"0","¹":"1","²":"2","³":"3","⁴":"4","⁵":"5","⁶":"6","⁷":"7","⁸":"8","⁹":"9" };
 
-// Accept if normalized strings match OR if both match when all spaces are removed.
-// This makes "72cm" match "72 cm" etc.
-function isFitbCorrect(user, answers){
-  if (typeof user !== 'string' || !answers || !answers.length) return false;
-  const u1 = norm(user);
-  const u2 = u1.replace(/\s+/g, '');
-  for (const a of answers){
-    const a1 = norm(a);
-    const a2 = a1.replace(/\s+/g, '');
-    if (u1 === a1 || u2 === a2) return true;
+function desuperscriptDigits(s){
+  return String(s).replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/g, ch => DESUP[ch] || ch);
+}
+
+// Turn "^2" → "²", "^3" → "³"; "cm2" / "m3" → "cm²" / "m³"
+function prettifyExponentsForDisplay(s){
+  let t = String(s);
+
+  // caret style
+  t = t.replace(/\^([0-9])/g, (_,d) => SUP_DIGITS[d] || "^"+d);
+
+  // common unit patterns (customize if you like)
+  const unitRe = /\b(km|m|cm|mm|dm|ml|mL|l|L)\s*([23])\b/g;
+  t = t.replace(unitRe, (_,u,d) => u + (d==="2"?"²":"³"));
+
+  // generic: letters + 2/3 at end, e.g., "cm2" "m3"
+  t = t.replace(/\b([a-zA-Z]+)\s*([23])\b/g, (_,letters,d) =>
+    letters + (d==="2" ? "²" : "³")
+  );
+
+  return t;
+}
+
+function prettifyExponentsInPlace(inputEl){
+  const prev = inputEl.value;
+  const next = prettifyExponentsForDisplay(prev);
+  if (next !== prev) {
+    const selEnd = inputEl.selectionEnd;
+    inputEl.value = next;
+    if (typeof selEnd === "number") inputEl.selectionEnd = inputEl.selectionStart = selEnd;
+  }
+}
+
+/* ---------------- Canonicalization & matching ---------------- */
+
+// Normalize to ASCII lower-case
+function toAsciiLower(s) {
+  return String(s || "")
+    .normalize("NFKC")
+    .toLowerCase();
+}
+
+// Map common unit spellings to canonical short forms
+const UNIT_RULES = [
+  [/\b(litre|liter|liters|litres|l)\b/g, "l"],
+  [/\b(millilitre|milliliter|milliliters|millilitres|ml)\b/g, "ml"],
+  [/\b(centimetre|centimeter|centimetres|centimeters|cm)\b/g, "cm"],
+  [/\b(metre|meter|metres|meters|m)\b/g, "m"],
+  [/\b(gram|grams|g)\b/g, "g"],
+  [/\b(kilogram|kilograms|kg)\b/g, "kg"],
+  [/\b(hour|hours|hr|hrs|h)\b/g, "h"],
+  [/\b(minute|minutes|min|mins)\b/g, "min"],
+  [/\b(second|seconds|sec|secs|s)\b/g, "s"],
+];
+
+// Preprocess but keep spaces (for mixed numbers like "1 3/5")
+// Also normalize superscripts → digits (so cm² and cm2 compare equal)
+function preprocessText(s) {
+  let t = toAsciiLower(s)
+    .replace(/[.,]/g, "")   // drop dots/commas
+    .replace(/ℓ/g, "l");    // fancy liter symbol
+
+  t = desuperscriptDigits(t);
+
+  // normalize spacing around slashes: "1 3 / 5" -> "1 3/5"
+  t = t.replace(/\s*\/\s*/g, "/");
+
+  // apply unit canonicalization
+  for (const [re, canon] of UNIT_RULES) t = t.replace(re, canon);
+
+  return t.trim();
+}
+
+// Remove all spaces for cheap exact compare
+function canonicalNoSpace(t) {
+  return t.replace(/\s+/g, "");
+}
+
+// Parse numberish with optional unit from preprocessed string
+function splitNumUnitLoose(prep) {
+  // mixed: a b/c
+  let m = prep.match(/^(\d+)\s+(\d+)\/(\d+)\s*([a-zµ]*)$/i);
+  if (m) {
+    const a = parseInt(m[1],10), b = parseInt(m[2],10), c = parseInt(m[3],10);
+    const unit = (m[4] || "").toLowerCase();
+    if (c !== 0) return { num: a + b/c, unit };
+  }
+
+  // fraction: b/c
+  m = prep.match(/^(\d+)\/(\d+)\s*([a-zµ]*)$/i);
+  if (m) {
+    const b = parseInt(m[1],10), c = parseInt(m[2],10);
+    const unit = (m[3] || "").toLowerCase();
+    if (c !== 0) return { num: b/c, unit };
+  }
+
+  // decimal/int
+  m = prep.match(/^(\d+(?:\.\d+)?)\s*([a-zµ]*)$/i);
+  if (m) {
+    const num = Number(m[1]);
+    const unit = (m[2] || "").toLowerCase();
+    if (Number.isFinite(num)) return { num, unit };
+  }
+
+  return null; // not a simple quantity
+}
+
+// Strict-or-fuzzy comparison
+function answersEquivalent(user, key) {
+  if (typeof user !== "string" || typeof key !== "string") return false;
+
+  // STRICT MODE: "=text" -> exact match (trim only)
+  if (key.startsWith("=")) {
+    const must = key.slice(1);
+    return user.trim() === must.trim();
+  }
+
+  // FUZZY MODE:
+  const uPrep = preprocessText(user);
+  const kPrep = preprocessText(key);
+
+  // cheap canonical match (spaces-insensitive, units normalized)
+  if (canonicalNoSpace(uPrep) === canonicalNoSpace(kPrep)) return true;
+
+  // numeric+unit compare
+  const uu = splitNumUnitLoose(uPrep);
+  const kk = splitNumUnitLoose(kPrep);
+  if (uu && kk) {
+    if (uu.unit !== kk.unit) return false;         // unit must match ("" allowed)
+    if (uu.num == null || kk.num == null) return false;
+    return Math.abs(uu.num - kk.num) < 1e-9;       // tolerance can be relaxed if needed
+  }
+
+  return false;
+}
+
+function isFitbCorrect(user, answers) {
+  if (typeof user !== "string" || !answers || !answers.length) return false;
+  for (const a of answers) {
+    if (answersEquivalent(user, a)) return true;
   }
   return false;
 }
 
+/* ---------------- Scoring, UI helpers ---------------- */
 function tallyScore(){
   let correct=0, total=0;
   for(let i=0;i<items.length;i++){
@@ -181,6 +387,15 @@ function tallyScore(){
     }else if(it.type==='fitb' && it.answersText && it.answersText.length){
       total++;
       if(isFitbCorrect(userAnswers[i], it.answersText)) correct++;
+    }else if(it.type==='fitb-multi'){
+      for(let k=0;k<it.parts.length;k++){
+        const p = it.parts[k];
+        if(p.answersText && p.answersText.length){
+          total++;
+          const ua = (userAnswers[i]||[])[k];
+          if(isFitbCorrect(ua, p.answersText)) correct++;
+        }
+      }
     }
   }
   return {correct,total};
@@ -190,6 +405,33 @@ function previewStem(q){
   if(looksLikeImage(q)) return "[image]";
   const s = q.trim();
   return s.length>24 ? s.slice(0,24)+"…" : s || "(blank)";
+}
+
+function itemStatus(i){
+  const it = items[i];
+  if(it.type==='mcq'){
+    if(items[i].answer==null) return (userAnswers[i]==null ? " " : "✗ ");
+    if(userAnswers[i]==null) return " ";
+    return (userAnswers[i]===it.answer) ? "✓ " : "✗ ";
+  }else if(it.type==='fitb'){
+    if(!it.answersText || !it.answersText.length) return (userAnswers[i]==null ? " " : "✗ ");
+    if(userAnswers[i]==null) return " ";
+    return isFitbCorrect(userAnswers[i], it.answersText) ? "✓ " : "✗ ";
+  }else{
+    let scorable=0, correct=0, touched=false;
+    for(let k=0;k<it.parts.length;k++){
+      const p=it.parts[k];
+      if(p.answersText && p.answersText.length){
+        scorable++;
+        const ua = (userAnswers[i]||[])[k];
+        if(ua!=null && ua!=="") touched = true;
+        if(isFitbCorrect(ua, p.answersText)) correct++;
+      }
+    }
+    if(scorable===0) return touched ? "✗ " : " ";
+    if(correct===scorable) return "✓ ";
+    return touched ? "✗ " : " ";
+  }
 }
 
 function updateHUD(){
@@ -202,15 +444,7 @@ function updateHUD(){
   for(let i=0;i<items.length;i++){
     const opt = document.createElement("option");
     opt.value = String(i);
-    const ua = userAnswers[i];
-    let mark = " ";
-    if(ua!=null){
-      const it = items[i];
-      const ok = (it.type==='mcq' && it.answer!=null && ua===it.answer) ||
-                 (it.type==='fitb' && isFitbCorrect(ua, it.answersText||[]));
-      mark = ok ? "✓ " : "✗ ";
-    }
-    opt.textContent = `${i+1}. ${mark}${previewStem(items[i].question)}`;
+    opt.textContent = `${i+1}. ${itemStatus(i)}${previewStem(items[i].question)}`;
     sel.appendChild(opt);
   }
   sel.value = String(current);
@@ -219,6 +453,7 @@ function updateHUD(){
   $("btnNext").disabled = (current>=items.length-1);
 }
 
+/* ---------------- Rendering ---------------- */
 function renderCurrent(){
   const stage = $("stage");
   stage.className = "stage";
@@ -243,7 +478,6 @@ function renderCurrent(){
   }
 
   if(it.type === 'mcq'){
-    // Options 1..4
     const opts=document.createElement("div");
     opts.className="options";
     for(let v=1; v<=4; v++){
@@ -260,14 +494,12 @@ function renderCurrent(){
     }
     stage.appendChild(opts);
 
-    // Key
     const key=document.createElement("span");
     key.id="key_current";
     key.className="answer-key"+(revealed[current]?"":" hidden");
     key.textContent = it.answer==null ? " (Answer: ?)" : ` (Answer: ${it.answer})`;
     stage.appendChild(key);
 
-    // Decorate if already answered
     if(userAnswers[current]!=null && it.answer!=null){
       const chosen=userAnswers[current];
       if(chosen===it.answer){ stage.classList.add("correct"); }
@@ -278,15 +510,13 @@ function renderCurrent(){
       }
     }
 
-    // Instant-check handler
     opts.addEventListener("change", function(ev){
       if(ev.target && ev.target.matches('input[type="radio"]')){
         onAnswerMCQ(parseInt(ev.target.value,10));
       }
     });
 
-  }else{
-    // FITB input (single line)
+  }else if(it.type === 'fitb'){
     const wrap = document.createElement("div");
     wrap.className = "fitb-wrap";
     const inp = document.createElement("input");
@@ -305,7 +535,6 @@ function renderCurrent(){
 
     stage.appendChild(wrap);
 
-    // Key (show only the first acceptable variant)
     const key=document.createElement("span");
     key.id="key_current";
     key.className="answer-key"+(revealed[current]?"":" hidden");
@@ -313,42 +542,103 @@ function renderCurrent(){
     key.textContent = firstAns ? ` (Answer: ${firstAns})` : " (Answer: ?)";
     stage.appendChild(key);
 
-    // Decorate if already answered
     if(typeof userAnswers[current]==='string' && it.answersText && it.answersText.length){
-      if(isFitbCorrect(userAnswers[current], it.answersText)){
-        stage.classList.add("correct");
-      }else{
-        stage.classList.add("wrong");
-      }
+      if(isFitbCorrect(userAnswers[current], it.answersText)) stage.classList.add("correct");
+      else stage.classList.add("wrong");
     }
 
-    // Enter checks; also check on blur
+    // Superscript prettify while typing
+    inp.addEventListener("input", () => prettifyExponentsInPlace(inp));
+
     inp.addEventListener("keydown", (e)=>{
       if(e.key === "Enter"){
-        e.preventDefault(); // stay single-line; do not submit form
+        e.preventDefault();
         onAnswerFITB(inp.value);
       }
     });
     inp.addEventListener("blur", ()=> onAnswerFITB(inp.value));
+
+  }else{
+    // Multi-part FITB
+    const partsBox = document.createElement("div");
+    partsBox.className = "parts";
+
+    const ua = userAnswers[current] || [];
+    const rv = revealed[current] || [];
+
+    it.parts.forEach((p, idx)=>{
+      const row = document.createElement("div");
+      row.className = "part-row";
+
+      const lab = document.createElement("div");
+      lab.className = "part-label";
+      lab.textContent = `(${(p.label||String.fromCharCode(97+idx)).toLowerCase()})`;
+      row.appendChild(lab);
+
+      const inp = document.createElement("input");
+      inp.className = "part-input";
+      inp.type = "text";
+      inp.setAttribute("maxlength","10");
+      inp.placeholder = "Answer…";
+      if(typeof ua[idx]==='string') inp.value = ua[idx];
+
+      const key = document.createElement("span");
+      key.className = "part-key" + (rv[idx] ? "" : " hidden");
+      const first = (p.answersText && p.answersText.length) ? p.answersText[0] : null;
+      key.textContent = first ? `Answer: ${first}` : "Answer: ?";
+
+      if(typeof ua[idx]==='string' && p.answersText && p.answersText.length){
+        const ok = isFitbCorrect(ua[idx], p.answersText);
+        inp.classList.toggle("correct", ok);
+        inp.classList.toggle("wrong", !ok);
+      }
+
+      // Superscript prettify while typing
+      inp.addEventListener("input", () => prettifyExponentsInPlace(inp));
+
+      inp.addEventListener("keydown", (e)=>{
+        if(e.key === "Enter"){
+          e.preventDefault();
+          onAnswerFITBMulti(idx, inp.value, inp, key, p.answersText);
+        }
+      });
+      inp.addEventListener("blur", ()=>{
+        onAnswerFITBMulti(idx, inp.value, inp, key, p.answersText);
+      });
+
+      row.appendChild(inp);
+      row.appendChild(key);
+      partsBox.appendChild(row);
+    });
+
+    const hint = document.createElement("div");
+    hint.className = "fitb-hint";
+    hint.textContent = "Each part is checked separately. Press Enter in a box to check that part.";
+    partsBox.appendChild(hint);
+
+    stage.appendChild(partsBox);
   }
 
-  // Update HUD & focus
   updateHUD();
+
   if(it.type==='mcq'){
     const first = stage.querySelector('input[type="radio"]');
     if(first && userAnswers[current]==null) first.focus();
-  }else{
+  }else if(it.type==='fitb'){
     const input = $("fitb_current");
     if(input && userAnswers[current]==null) input.focus();
+  }else{
+    const first = stage.querySelector('.part-input');
+    if(first){ first.focus(); }
   }
 }
 
+/* ---------------- Answer handlers ---------------- */
 function onAnswerMCQ(chosen){
   const stage = $("stage");
   const key   = $("key_current");
   const it    = items[current];
 
-  // reset visuals
   stage.classList.remove("correct","wrong");
   const prevHL = stage.querySelector(".correct-choice");
   if(prevHL) prevHL.classList.remove("correct-choice");
@@ -380,20 +670,32 @@ function onAnswerFITB(text){
   const key   = $("key_current");
   const it    = items[current];
 
-  // reset visuals
   stage.classList.remove("correct","wrong");
-
   userAnswers[current] = text;
 
   const ok = isFitbCorrect(text, it.answersText||[]);
-  if(ok) stage.classList.add("correct");
-  else   stage.classList.add("wrong");
+  stage.classList.add(ok ? "correct" : "wrong");
 
   if(key) key.classList.remove("hidden");
   revealed[current] = true;
   updateHUD();
 }
 
+function onAnswerFITBMulti(idx, value, inputEl, keyEl, answersText){
+  const ua = userAnswers[current];
+  const rv = revealed[current];
+  if(Array.isArray(ua)){ ua[idx] = value; }
+  if(Array.isArray(rv)){ rv[idx] = true; }
+
+  const ok = isFitbCorrect(value, answersText||[]);
+  inputEl.classList.toggle("correct", ok);
+  inputEl.classList.toggle("wrong", !ok);
+  if(keyEl) keyEl.classList.remove("hidden");
+
+  updateHUD();
+}
+
+/* ---------------- Nav & scoring controls ---------------- */
 function goPrev(){ if(current>0){ current--; renderCurrent(); } }
 function goNext(){ if(current<items.length-1){ current++; renderCurrent(); } }
 
@@ -405,7 +707,13 @@ function finalizeScore(){
 }
 
 function submitQuiz(){
-  revealed = revealed.map(()=>true);
+  for(let i=0;i<items.length;i++){
+    if(items[i].type==='fitb-multi' && Array.isArray(revealed[i])){
+      revealed[i] = revealed[i].map(()=>true);
+    }else{
+      revealed[i] = true;
+    }
+  }
   $("score").textContent = "";
   finalizeScore();
   renderCurrent();
@@ -425,13 +733,13 @@ function buildJump(){
   for(let i=0;i<items.length;i++){
     const opt = document.createElement("option");
     opt.value = String(i);
-    opt.textContent = `${i+1}. ${previewStem(items[i].question)}`;
+    opt.textContent = `${i+1}. ${itemStatus(i)}${previewStem(items[i].question)}`;
     sel.appendChild(opt);
   }
   sel.value = "0";
 }
 
-/* ---------- Fetch mcq.txt (GitHub Pages, with cache-bust) ---------- */
+/* ---------------- Fetch mcq.txt (GitHub Pages, with cache-bust) ---------------- */
 async function fetchText(url){
   const bust = url.includes('?') ? '&' : '?';
   const res = await fetch(url + bust + 'cb=' + Date.now(), { cache: "no-store" });
@@ -472,7 +780,7 @@ async function loadMCQFrom(url){
   }
 }
 
-/* ---------- Wire up UI ---------- */
+/* ---------------- Wire up UI ---------------- */
 $("btnPrev").addEventListener("click", goPrev);
 $("btnNext").addEventListener("click", goNext);
 $("jumpSelect").addEventListener("change", e=>{
@@ -483,10 +791,19 @@ $("jumpSelect").addEventListener("change", e=>{
   }
 });
 $("btnFirstUnanswered").addEventListener("click", ()=>{
-  let idx = userAnswers.findIndex(v=>v==null);
-  if(idx===-1) idx = 0;
-  current = idx;
-  renderCurrent();
+  for(let i=0;i<items.length;i++){
+    const it = items[i];
+    if(it.type==='mcq' || it.type==='fitb'){
+      if(userAnswers[i]==null){ current=i; renderCurrent(); return; }
+    }else{
+      const ua = userAnswers[i]||[];
+      const rv = revealed[i]||[];
+      const idx = ua.findIndex(v=>v==null || v==="");
+      if(idx!==-1){ current=i; renderCurrent(); return; }
+      if(rv.some(v=>!v)){ current=i; renderCurrent(); return; }
+    }
+  }
+  current = 0; renderCurrent();
 });
 
 $("btnSubmit").addEventListener("click", submitQuiz);
@@ -501,17 +818,15 @@ $("btnReload").addEventListener("click", ()=>{
   loadMCQFrom(currentMCQUrl);
 });
 
-/* ---------- Auto-init (uses ?file= if provided, else smart fallbacks) ---------- */
+/* ---------------- Auto-init (uses ?file= if provided, else smart fallbacks) ---------------- */
 (function initFromQuery(){
   const params = new URLSearchParams(location.search);
   const asked = (params.get("file") || "").trim();
 
-  // current directory of this page (ends with /)
   const dir = location.pathname.replace(/[^/]*$/, '');
-  // Build likely candidates (prefer mcq.txt)
   const candidates = asked ? [asked] : [
     dir + 'mcq.txt',
-    dir + 'MCQ.txt',
+    dir + 'MCQ.txt',  // legacy
     '/mcq.txt',
     '/MCQ.txt'
   ];
