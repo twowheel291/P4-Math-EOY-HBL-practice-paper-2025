@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>MCQ + Fill-in (GitHub Pages • Multi-part, Superscripts)</title>
+<title>MCQ + Fill-in (GitHub Pages • Multi-part, Superscripts, Degrees)</title>
 <style>
   body { font-family: Arial, sans-serif; font-size:16px; line-height:1.4; margin:0; padding:16px; }
   h1 { font-size:20px; margin:0 0 10px; }
@@ -101,7 +101,9 @@
    - Single FITB: acceptable variants inside \...\ or /.../
    - Multi-part FITB: separate parts by "|" and optional labels like a:\...\ b:\...\
    - Strict display format: prefix a variant with "=" (e.g., \=1.6\) to require exact text.
-   - Superscript UX: users can type "cm2" or "cm^2" and see "cm²"; grading treats them the same.
+   - Superscript UX: "cm2" / "cm^2" -> "cm²" while typing; grading treats them the same.
+   - Degree UX: "50^o" / "50 deg" -> "50°" while typing; grading treats them the same.
+   - Inputs auto-grow maxlength based on key + typed content.
 */
 
 let items = []; // See parseMCQ for shape per type
@@ -228,7 +230,7 @@ function initState(n){
   current = 0;
 }
 
-/* ---------------- Superscript helpers (for UX + grading) ---------------- */
+/* ---------------- Superscript & degree helpers (UX + grading) ---------------- */
 const SUP_DIGITS = { "0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹" };
 const DESUP = { "⁰":"0","¹":"1","²":"2","³":"3","⁴":"4","⁵":"5","⁶":"6","⁷":"7","⁸":"8","⁹":"9" };
 
@@ -236,11 +238,12 @@ function desuperscriptDigits(s){
   return String(s).replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/g, ch => DESUP[ch] || ch);
 }
 
-// Turn "^2" → "²", "^3" → "³"; "cm2" / "m3" → "cm²" / "m³"
+// Turn "^2" → "²", "^3" → "³"; "cm2"/"m3" → "cm²"/"m³"; degrees: "50^o"/"50 deg" → "50°"
+// (Intentionally NOT supporting bare "50o")
 function prettifyExponentsForDisplay(s){
   let t = String(s);
 
-  // caret style
+  // caret style exponents
   t = t.replace(/\^([0-9])/g, (_,d) => SUP_DIGITS[d] || "^"+d);
 
   // common unit patterns (customize if you like)
@@ -252,6 +255,10 @@ function prettifyExponentsForDisplay(s){
     letters + (d==="2" ? "²" : "³")
   );
 
+  // degrees: 50^o -> 50°, 50 deg -> 50°
+  t = t.replace(/(\d+)\s*\^\s*[oO]\b/g, (_, n) => n + "°");
+  t = t.replace(/(\d+)\s*(?:deg|degrees?)\b/gi, (_, n) => n + "°");
+
   return t;
 }
 
@@ -262,6 +269,31 @@ function prettifyExponentsInPlace(inputEl){
     const selEnd = inputEl.selectionEnd;
     inputEl.value = next;
     if (typeof selEnd === "number") inputEl.selectionEnd = inputEl.selectionStart = selEnd;
+  }
+}
+
+/* ---------------- Dynamic maxlength helpers ---------------- */
+function displayLength(s){
+  return prettifyExponentsForDisplay(String(s || "")).length;
+}
+function computeDesiredMaxLength(answersText, currentVal){
+  const BASE_MIN = 10, CAP_MAX = 64, BUF = 2;
+  let longestKey = 0;
+  if (Array.isArray(answersText) && answersText.length){
+    for (const a of answersText){
+      longestKey = Math.max(longestKey, displayLength(a));
+    }
+  }
+  const typedLen = displayLength(currentVal || "");
+  const want = Math.max(BASE_MIN, longestKey + BUF, typedLen + BUF);
+  return Math.min(want, CAP_MAX);
+}
+function adjustMaxLengthForInput(inputEl, answersText){
+  if (!inputEl) return;
+  const desired = computeDesiredMaxLength(answersText, inputEl.value);
+  const current = Number(inputEl.getAttribute("maxlength") || "0");
+  if (!current || desired !== current){
+    inputEl.setAttribute("maxlength", String(desired));
   }
 }
 
@@ -285,16 +317,20 @@ const UNIT_RULES = [
   [/\b(hour|hours|hr|hrs|h)\b/g, "h"],
   [/\b(minute|minutes|min|mins)\b/g, "min"],
   [/\b(second|seconds|sec|secs|s)\b/g, "s"],
+  [/\b(degree|degrees|deg)\b/g, "deg"],   // degrees normalized
 ];
 
 // Preprocess but keep spaces (for mixed numbers like "1 3/5")
-// Also normalize superscripts → digits (so cm² and cm2 compare equal)
+// Also: normalize superscripts → digits; degree symbol → "deg"
 function preprocessText(s) {
   let t = toAsciiLower(s)
     .replace(/[.,]/g, "")   // drop dots/commas
     .replace(/ℓ/g, "l");    // fancy liter symbol
 
   t = desuperscriptDigits(t);
+
+  // degree symbol → "deg"
+  t = t.replace(/°/g, " deg ");
 
   // normalize spacing around slashes: "1 3 / 5" -> "1 3/5"
   t = t.replace(/\s*\/\s*/g, "/");
@@ -523,9 +559,16 @@ function renderCurrent(){
     inp.id = "fitb_current";
     inp.className = "fitb-input";
     inp.type = "text";
-    inp.setAttribute("maxlength","10");
-    inp.placeholder = "Type your answer… (max 10 chars)";
+    inp.placeholder = "Type your answer…";
     if(typeof userAnswers[current]==='string') inp.value = userAnswers[current];
+
+    // Initial maxlength + prettify
+    adjustMaxLengthForInput(inp, it.answersText);
+    inp.addEventListener("input", () => {
+      prettifyExponentsInPlace(inp);
+      adjustMaxLengthForInput(inp, it.answersText);
+    });
+
     wrap.appendChild(inp);
 
     const hint = document.createElement("div");
@@ -546,9 +589,6 @@ function renderCurrent(){
       if(isFitbCorrect(userAnswers[current], it.answersText)) stage.classList.add("correct");
       else stage.classList.add("wrong");
     }
-
-    // Superscript prettify while typing
-    inp.addEventListener("input", () => prettifyExponentsInPlace(inp));
 
     inp.addEventListener("keydown", (e)=>{
       if(e.key === "Enter"){
@@ -578,9 +618,15 @@ function renderCurrent(){
       const inp = document.createElement("input");
       inp.className = "part-input";
       inp.type = "text";
-      inp.setAttribute("maxlength","10");
       inp.placeholder = "Answer…";
       if(typeof ua[idx]==='string') inp.value = ua[idx];
+
+      // Initial maxlength + prettify + dynamic grow
+      adjustMaxLengthForInput(inp, p.answersText);
+      inp.addEventListener("input", () => {
+        prettifyExponentsInPlace(inp);
+        adjustMaxLengthForInput(inp, p.answersText);
+      });
 
       const key = document.createElement("span");
       key.className = "part-key" + (rv[idx] ? "" : " hidden");
@@ -592,9 +638,6 @@ function renderCurrent(){
         inp.classList.toggle("correct", ok);
         inp.classList.toggle("wrong", !ok);
       }
-
-      // Superscript prettify while typing
-      inp.addEventListener("input", () => prettifyExponentsInPlace(inp));
 
       inp.addEventListener("keydown", (e)=>{
         if(e.key === "Enter"){
