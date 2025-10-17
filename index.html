@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -48,16 +48,16 @@
 <body>
 
 <h1>MCQ + Fill-in (GitHub Pages • One-at-a-time)</h1>
-<div id="status" class="status">This page will fetch <code>MCQ.txt</code> from the same folder. Put images beside this HTML (or use relative URLs in MCQ.txt).</div>
+<div id="status" class="status">This page will fetch <code>mcq.txt</code> from the same folder. Put images beside this HTML (or use relative URLs in mcq.txt).</div>
 
 <div class="loader">
-  <strong>1) Source for MCQ.txt</strong>
+  <strong>1) Source for mcq.txt</strong>
   <div class="row">
-    <input id="mcqUrl" type="text" placeholder="MCQ.txt URL or relative path" value="MCQ.txt">
+    <input id="mcqUrl" type="text" placeholder="mcq.txt URL or relative path" value="mcq.txt">
     <button id="btnLoad" type="button">Load</button>
     <button id="btnReload" type="button" title="Re-fetch the current URL">Reload</button>
   </div>
-  <div class="muted">Tip: You can also set <code>?file=path/MCQ.txt</code> in the URL.</div>
+  <div class="muted">Tip: You can also set <code>?file=path/mcq.txt</code> in the URL.</div>
 </div>
 
 <div id="quizArea" class="hidden">
@@ -87,7 +87,7 @@
 
 <script>
 /* -------- GitHub Pages version (fetch-based) with FITB (single-line, multi-answers) --------
-   - Auto fetches MCQ.txt from same folder (or ?file=...).
+   - Auto fetches mcq.txt from same folder (or ?file=...).
    - MCQ when answer is 1..4
    - FITB when answer contains one or more /alt/ segments: e.g. /72/72cm/72 cm/
      (unlimited; matching ignores case & spaces)
@@ -99,7 +99,7 @@ let items = []; // [{type:'mcq'|'fitb', question, answer (num|null), answersText
 let userAnswers = []; // for mcq: number; for fitb: string; null if unanswered
 let revealed = [];    // [bool]
 let current = 0;
-let currentMCQUrl = "MCQ.txt";
+let currentMCQUrl = "mcq.txt";
 
 function $(id){ return document.getElementById(id); }
 function normalizeLineEndings(s){return s.replace(/\r\n/g,"\n").replace(/\r/g,"\n");}
@@ -431,7 +431,7 @@ function buildJump(){
   sel.value = "0";
 }
 
-/* ---------- Fetch MCQ.txt (GitHub Pages) ---------- */
+/* ---------- Fetch mcq.txt (GitHub Pages) ---------- */
 async function fetchText(url){
   const res = await fetch(url, { cache: "no-store" });
   if(!res.ok) throw new Error(`HTTP ${res.status} (${res.statusText})`);
@@ -480,7 +480,7 @@ $("btnSubmit").addEventListener("click", submitQuiz);
 $("btnReset").addEventListener("click", resetQuiz);
 
 $("btnLoad").addEventListener("click", ()=>{
-  const url = $("mcqUrl").value.trim() || "MCQ.txt";
+  const url = $("mcqUrl").value.trim() || "mcq.txt";
   currentMCQUrl = url;
   loadMCQFrom(url);
 });
@@ -496,8 +496,8 @@ $("btnReload").addEventListener("click", ()=>{
     $("mcqUrl").value = f;
     currentMCQUrl = f;
   }else{
-    $("mcqUrl").value = "MCQ.txt";
-    currentMCQUrl = "MCQ.txt";
+    $("mcqUrl").value = "mcq.txt";
+    currentMCQUrl = "mcq.txt";
   }
   loadMCQFrom(currentMCQUrl);
 })();
