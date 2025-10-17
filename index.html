@@ -104,6 +104,7 @@
    - Superscript UX: "cm2" / "cm^2" -> "cm²" while typing; grading treats them the same.
    - Degree UX: "50^o" / "50 deg" -> "50°" while typing; grading treats them the same.
    - Inputs auto-grow maxlength based on key + typed content.
+   - NEW: If the student's answer is correct, do NOT reveal the key.
 */
 
 let items = []; // See parseMCQ for shape per type
@@ -530,15 +531,17 @@ function renderCurrent(){
     }
     stage.appendChild(opts);
 
+    // Key (show only when revealed AND answer is wrong/unknown)
+    const chosen = userAnswers[current];
+    const isCorrect = (it.answer!=null && chosen===it.answer);
     const key=document.createElement("span");
     key.id="key_current";
-    key.className="answer-key"+(revealed[current]?"":" hidden");
+    key.className="answer-key"+((revealed[current] && !isCorrect)?"":" hidden");
     key.textContent = it.answer==null ? " (Answer: ?)" : ` (Answer: ${it.answer})`;
     stage.appendChild(key);
 
-    if(userAnswers[current]!=null && it.answer!=null){
-      const chosen=userAnswers[current];
-      if(chosen===it.answer){ stage.classList.add("correct"); }
+    if(chosen!=null && it.answer!=null){
+      if(isCorrect){ stage.classList.add("correct"); }
       else{
         stage.classList.add("wrong");
         const cl=stage.querySelector(`.options label[data-val="${it.answer}"]`);
@@ -578,16 +581,20 @@ function renderCurrent(){
 
     stage.appendChild(wrap);
 
+    const answered = typeof userAnswers[current]==='string';
+    const okNow = answered && it.answersText && it.answersText.length
+      ? isFitbCorrect(userAnswers[current], it.answersText) : false;
+
     const key=document.createElement("span");
     key.id="key_current";
-    key.className="answer-key"+(revealed[current]?"":" hidden");
+    // Show key only if revealed AND (not correct)
+    key.className="answer-key"+((revealed[current] && !okNow)?"":" hidden");
     const firstAns = (it.answersText && it.answersText.length) ? it.answersText[0] : null;
     key.textContent = firstAns ? ` (Answer: ${firstAns})` : " (Answer: ?)";
     stage.appendChild(key);
 
-    if(typeof userAnswers[current]==='string' && it.answersText && it.answersText.length){
-      if(isFitbCorrect(userAnswers[current], it.answersText)) stage.classList.add("correct");
-      else stage.classList.add("wrong");
+    if(answered && it.answersText && it.answersText.length){
+      stage.classList.add(okNow ? "correct" : "wrong");
     }
 
     inp.addEventListener("keydown", (e)=>{
@@ -628,13 +635,16 @@ function renderCurrent(){
         adjustMaxLengthForInput(inp, p.answersText);
       });
 
+      const answered = typeof ua[idx]==='string' && ua[idx] !== "";
+      const ok = answered && p.answersText && p.answersText.length
+        ? isFitbCorrect(ua[idx], p.answersText) : false;
+
       const key = document.createElement("span");
-      key.className = "part-key" + (rv[idx] ? "" : " hidden");
+      key.className = "part-key" + ((rv[idx] && !ok) ? "" : " hidden"); // reveal only if wrong
       const first = (p.answersText && p.answersText.length) ? p.answersText[0] : null;
       key.textContent = first ? `Answer: ${first}` : "Answer: ?";
 
-      if(typeof ua[idx]==='string' && p.answersText && p.answersText.length){
-        const ok = isFitbCorrect(ua[idx], p.answersText);
+      if(answered && p.answersText && p.answersText.length){
         inp.classList.toggle("correct", ok);
         inp.classList.toggle("wrong", !ok);
       }
@@ -695,14 +705,16 @@ function onAnswerMCQ(chosen){
     return;
   }
 
-  if(chosen === it.answer){
+  const isCorrect = (chosen === it.answer);
+  if(isCorrect){
     stage.classList.add("correct");
-    if(key) key.classList.remove("hidden");
+    // do NOT reveal key if correct
+    if(key) key.classList.add("hidden");
   }else{
     stage.classList.add("wrong");
     const cl=stage.querySelector(`.options label[data-val="${it.answer}"]`);
     if(cl) cl.classList.add("correct-choice");
-    if(key) key.classList.remove("hidden");
+    if(key) key.classList.remove("hidden"); // reveal only on wrong
   }
   revealed[current] = true;
   updateHUD();
@@ -719,7 +731,10 @@ function onAnswerFITB(text){
   const ok = isFitbCorrect(text, it.answersText||[]);
   stage.classList.add(ok ? "correct" : "wrong");
 
-  if(key) key.classList.remove("hidden");
+  // Reveal key only if wrong or blank
+  if(key && !ok) key.classList.remove("hidden");
+  if(key && ok)  key.classList.add("hidden");
+
   revealed[current] = true;
   updateHUD();
 }
@@ -733,7 +748,10 @@ function onAnswerFITBMulti(idx, value, inputEl, keyEl, answersText){
   const ok = isFitbCorrect(value, answersText||[]);
   inputEl.classList.toggle("correct", ok);
   inputEl.classList.toggle("wrong", !ok);
-  if(keyEl) keyEl.classList.remove("hidden");
+
+  // Reveal only if wrong or empty
+  if(keyEl && !ok) keyEl.classList.remove("hidden");
+  if(keyEl && ok)  keyEl.classList.add("hidden");
 
   updateHUD();
 }
@@ -759,7 +777,7 @@ function submitQuiz(){
   }
   $("score").textContent = "";
   finalizeScore();
-  renderCurrent();
+  renderCurrent(); // This will still show keys on submit (even for correct). Change if you prefer otherwise.
 }
 
 function resetQuiz(){
