@@ -48,7 +48,7 @@
 <body>
 
 <h1>MCQ + Fill-in (GitHub Pages • One-at-a-time)</h1>
-<div id="status" class="status">This page will fetch <code>mcq.txt</code> from the same folder. Put images beside this HTML (or use relative URLs in mcq.txt).</div>
+<div id="status" class="status">This page auto-loads <code>mcq.txt</code> (same folder). Put images beside this HTML or use relative URLs in mcq.txt.</div>
 
 <div class="loader">
   <strong>1) Source for mcq.txt</strong>
@@ -99,7 +99,7 @@ let items = []; // [{type:'mcq'|'fitb', question, answer (num|null), answersText
 let userAnswers = []; // for mcq: number; for fitb: string; null if unanswered
 let revealed = [];    // [bool]
 let current = 0;
-let currentMCQUrl = "mcq.txt";
+let currentMCQUrl = "mcq.txt"; // default
 
 function $(id){ return document.getElementById(id); }
 function normalizeLineEndings(s){return s.replace(/\r\n/g,"\n").replace(/\r/g,"\n");}
@@ -431,11 +431,21 @@ function buildJump(){
   sel.value = "0";
 }
 
-/* ---------- Fetch mcq.txt (GitHub Pages) ---------- */
+/* ---------- Fetch mcq.txt (GitHub Pages, with cache-bust) ---------- */
 async function fetchText(url){
-  const res = await fetch(url, { cache: "no-store" });
+  const bust = url.includes('?') ? '&' : '?';
+  const res = await fetch(url + bust + 'cb=' + Date.now(), { cache: "no-store" });
   if(!res.ok) throw new Error(`HTTP ${res.status} (${res.statusText})`);
   return await res.text();
+}
+
+async function tryFetchInOrder(urls){
+  let lastErr = null;
+  for(const u of urls){
+    try { return { url: u, text: await fetchText(u) }; }
+    catch(e){ lastErr = e; }
+  }
+  throw lastErr || new Error("All fetch attempts failed.");
 }
 
 async function loadMCQFrom(url){
@@ -446,15 +456,18 @@ async function loadMCQFrom(url){
     if(!items.length){
       $("status").textContent = `Loaded ${url}, but no valid lines were found.`;
       $("quizArea").classList.add("hidden");
+      document.querySelector(".loader").style.display = ""; // keep loader visible
       return;
     }
     initState(items.length);
     $("quizArea").classList.remove("hidden");
     $("status").textContent = `Loaded ${items.length} questions from ${url}`;
+    document.querySelector(".loader").style.display = "none"; // hide loader after success
     buildJump();
     renderCurrent();
   }catch(e){
     $("quizArea").classList.add("hidden");
+    document.querySelector(".loader").style.display = ""; // show loader if failed
     $("status").textContent = `Failed to fetch/parse ${url}: ` + (e && e.message ? e.message : e);
   }
 }
@@ -488,18 +501,43 @@ $("btnReload").addEventListener("click", ()=>{
   loadMCQFrom(currentMCQUrl);
 });
 
-/* ---------- Auto-init from ?file= ---------- */
+/* ---------- Auto-init (uses ?file= if provided, else smart fallbacks) ---------- */
 (function initFromQuery(){
   const params = new URLSearchParams(location.search);
-  const f = (params.get("file") || "").trim();
-  if(f){
-    $("mcqUrl").value = f;
-    currentMCQUrl = f;
-  }else{
-    $("mcqUrl").value = "mcq.txt";
-    currentMCQUrl = "mcq.txt";
-  }
-  loadMCQFrom(currentMCQUrl);
+  const asked = (params.get("file") || "").trim();
+
+  // current directory of this page (ends with /)
+  const dir = location.pathname.replace(/[^/]*$/, '');
+  // Build likely candidates (prefer mcq.txt)
+  const candidates = asked ? [asked] : [
+    dir + 'mcq.txt',
+    dir + 'MCQ.txt',
+    '/mcq.txt',
+    '/MCQ.txt'
+  ];
+
+  $("mcqUrl").value = asked || 'mcq.txt';
+
+  tryFetchInOrder(candidates).then(({url, text})=>{
+    currentMCQUrl = url;
+    items = parseMCQ(text);
+    if(!items.length){
+      $("status").textContent = `Loaded ${url}, but no valid lines were found.`;
+      $("quizArea").classList.add("hidden");
+      document.querySelector(".loader").style.display = ""; // keep loader visible
+      return;
+    }
+    $("quizArea").classList.remove("hidden");
+    $("status").textContent = `Loaded ${items.length} questions from ${url}`;
+    document.querySelector(".loader").style.display = "none"; // hide on success
+    initState(items.length);
+    buildJump(); renderCurrent();
+  }).catch(err=>{
+    $("quizArea").classList.add("hidden");
+    document.querySelector(".loader").style.display = ""; // show loader if failed
+    $("status").textContent = `Failed to fetch mcq.txt (tried: ${candidates.join(' , ')}). ` +
+      (err && err.message ? err.message : err);
+  });
 })();
 </script>
 
